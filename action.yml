@@ -1,0 +1,32 @@
+name: 'TuxCare VEX Auto-Triage'
+description: 'Automatically dismiss Dependabot security alerts based on TuxCare VEX data'
+author: 'TuxCare'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  ecosystems:
+    description: 'Comma-separated list of ecosystems to process (java, python, javascript, php)'
+    required: true
+  github-token:
+    description: 'GitHub token with security_events write permission'
+    required: true
+  dry-run:
+    description: 'Simulate dismissals without actually dismissing alerts'
+    required: false
+    default: 'false'
+  max-alerts:
+    description: 'Maximum number of alerts to process (0 = unlimited, useful for testing)'
+    required: false
+    default: '0'
+  verbosity:
+    description: 'Logging verbosity level (DEBUG, INFO, WARNING, ERROR)'
+    required: false
+    default: 'INFO'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+

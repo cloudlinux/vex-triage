@@ -1,0 +1,56 @@
+name: Test Action
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-dry-run:
+    name: Test Dry-Run Mode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Run action in dry-run mode
+        uses: ./
+        with:
+          ecosystems: 'java'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          dry-run: 'true'
+          max-alerts: '10'
+          verbosity: 'DEBUG'
+  
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+      
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+      
+      - name: Validate structure
+        run: |
+          python validate.py
+

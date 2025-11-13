@@ -2,10 +2,16 @@
 
 import logging
 import time
-from typing import Dict, List, Optional, Any
+from typing import Any
 import requests
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
 
-from src.utils import GitHubAPIError, retry_with_backoff
+from src.utils import GitHubAPIError
 
 
 logger = logging.getLogger("tuxcare-vex")
@@ -78,27 +84,112 @@ class GitHubClient:
             token: GitHub personal access token
             repository: Repository in format "owner/repo"
         """
-        self.token = token
+        # Clean token of any whitespace or quotes
+        self.token = token.strip().strip('"').strip("'")
         self.repository = repository
         
+        # Log token info for debugging (without revealing the actual token)
+        logger.debug(f"Token length: {len(self.token)}")
+        if self.token:
+            # Detect token type by prefix
+            match self.token[:11] if len(self.token) >= 11 else self.token[:4]:
+                case s if s.startswith('ghp_'):
+                    logger.debug("Token type: Personal Access Token (classic)")
+                case s if s.startswith('github_pat_'):
+                    logger.debug("Token type: Fine-grained Personal Access Token")
+                case s if s.startswith('ghs_'):
+                    logger.debug("Token type: GitHub App installation token")
+                case s if s.startswith('gho_'):
+                    logger.debug("Token type: OAuth token")
+                case s if s.startswith('ghu_'):
+                    logger.debug("Token type: GitHub App user token")
+                case s if s.startswith('v1.'):
+                    logger.debug("Token type: GitHub Actions token (GITHUB_TOKEN)")
+                case _:
+                    logger.warning(f"Unknown token type (prefix: {self.token[:4]}...)")
+        else:
+            logger.error("Token is empty!")
+        
         # Create session with auth
+        # GitHub API accepts both "Bearer" and "token" prefix, but "Bearer" is preferred
+        # for OAuth tokens and "token" for PATs. We'll use "Bearer" for all as it's more modern.
+        # However, for GitHub Actions tokens specifically, let's try both if needed.
         self.session = requests.Session()
         self.session.headers.update({
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {self.token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28"
         })
         
+        # For debugging: also try with "token" prefix if Bearer fails
+        self._auth_prefix = "Bearer"
+        
         # Rate limit tracking
-        self._rate_limit_remaining: Optional[int] = None
-        self._rate_limit_reset: Optional[int] = None
+        self._rate_limit_remaining: int | None = None
+        self._rate_limit_reset: int | None = None
     
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=2.0,
-        exceptions=(requests.RequestException,)
+    def check_token_permissions(self) -> dict[str, Any]:
+        """
+        Check what permissions the token has by querying the user endpoint.
+        
+        Returns:
+            Dictionary with permission information
+        """
+        try:
+            # First try with Bearer
+            response = self.session.get("https://api.github.com/user", timeout=10)
+            
+            # If Bearer fails with 403, try legacy "token" format
+            if response.status_code == 403:
+                logger.debug("Bearer auth failed, trying legacy 'token' format...")
+                headers = {
+                    "Authorization": f"token {self.token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28"
+                }
+                response = requests.get("https://api.github.com/user", headers=headers, timeout=10)
+                
+                # If legacy format works, update the session to use it
+                if response.status_code == 200:
+                    logger.info("Using legacy 'token' auth format (Bearer didn't work)")
+                    self.session.headers.update({"Authorization": f"token {self.token}"})
+                    self._auth_prefix = "token"
+            
+            result = {
+                "authenticated": response.status_code == 200,
+                "status_code": response.status_code,
+                "scopes": response.headers.get("X-OAuth-Scopes", ""),
+                "user": response.json().get("login", "unknown") if response.status_code == 200 else None
+            }
+            
+            # If still 403, provide detailed error
+            if response.status_code == 403:
+                try:
+                    error_data = response.json()
+                    result["error_message"] = error_data.get("message", "")
+                    result["error_docs"] = error_data.get("documentation_url", "")
+                    logger.error(f"Token authentication failed (403): {error_data.get('message', 'Unknown error')}")
+                    logger.error("This usually means:")
+                    logger.error("  1. The token is invalid or expired")
+                    logger.error("  2. The token doesn't have the required permissions")
+                    logger.error("  3. GitHub Actions GITHUB_TOKEN may have restricted access")
+                except Exception:
+                    logger.error("Token authentication failed (403): Unable to parse error response")
+            
+            logger.debug(f"Token check result: {result}")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to check token permissions: {e}")
+            return {"authenticated": False, "error": str(e)}
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(requests.RequestException),
+        reraise=True
     )
-    def gql(self, query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def gql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Execute a GraphQL query.
         
@@ -177,8 +268,8 @@ class GitHubClient:
         self,
         owner: str,
         repo: str,
-        after: Optional[str] = None
-    ) -> Dict[str, Any]:
+        after: str | None = None
+    ) -> dict[str, Any]:
         """
         Fetch vulnerability alerts for a repository.
         
@@ -247,7 +338,7 @@ class GitHubClient:
         owner: str,
         repo: str,
         max_alerts: int = 0
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Fetch all open vulnerability alerts with pagination.
         
@@ -259,7 +350,7 @@ class GitHubClient:
         Returns:
             List of alert objects
         """
-        all_alerts: List[Dict[str, Any]] = []
+        all_alerts: list[dict[str, Any]] = []
         after = None
         page_count = 0
         
@@ -269,13 +360,45 @@ class GitHubClient:
             
             data = self.get_alerts(owner, repo, after)
             
-            vulnerability_alerts = data.get("repository", {}).get("vulnerabilityAlerts", {})
+            # Check if repository was found
+            repository = data.get("repository")
+            if repository is None:
+                logger.error(f"Repository {owner}/{repo} not found or not accessible")
+                logger.error("Possible causes:")
+                logger.error("  1. Repository doesn't exist")
+                logger.error("  2. Token doesn't have access to the repository")
+                logger.error("  3. Repository name is incorrect")
+                break
+            
+            vulnerability_alerts = repository.get("vulnerabilityAlerts")
+            if vulnerability_alerts is None:
+                logger.error("vulnerabilityAlerts field returned null")
+                logger.error("Possible causes:")
+                logger.error("  1. Token doesn't have 'security_events' scope/permission")
+                logger.error("  2. Token doesn't have sufficient access (admin/maintain/write) to the repository")
+                logger.error("  3. Dependabot alerts are not enabled on the repository")
+                logger.error("")
+                logger.error("To fix this:")
+                logger.error("  - Ensure your workflow has 'permissions: security-events: write'")
+                logger.error("  - Check that Dependabot alerts are enabled in repository settings")
+                logger.error("  - Verify the token has access to security features")
+                break
+            
             nodes = vulnerability_alerts.get("nodes", [])
             page_info = vulnerability_alerts.get("pageInfo", {})
             
             all_alerts.extend(nodes)
             
             logger.info(f"Fetched {len(nodes)} alerts (total: {len(all_alerts)})")
+            
+            # Provide helpful information on first page if no alerts
+            if page_count == 1 and len(nodes) == 0:
+                logger.warning("No alerts found on first page")
+                logger.info("If you expect alerts to exist:")
+                logger.info("  1. Verify Dependabot alerts are enabled in Settings → Security → Code security")
+                logger.info("  2. Check workflow permissions: security-events: write")
+                logger.info("  3. Ensure token has access to security features")
+                logger.info("  4. Run the debug script: python debug_permissions.py")
             
             # Check if we've reached the limit
             if max_alerts > 0 and len(all_alerts) >= max_alerts:
@@ -295,7 +418,7 @@ class GitHubClient:
         return all_alerts
     
     @staticmethod
-    def extract_cve(alert: Dict[str, Any]) -> Optional[str]:
+    def extract_cve(alert: dict[str, Any]) -> str | None:
         """
         Extract CVE identifier from alert.
         
@@ -315,7 +438,7 @@ class GitHubClient:
         return None
     
     @staticmethod
-    def get_package_info(alert: Dict[str, Any]) -> Dict[str, str]:
+    def get_package_info(alert: dict[str, Any]) -> dict[str, str]:
         """
         Extract package information from alert.
         
@@ -323,7 +446,7 @@ class GitHubClient:
             alert: Alert object from GraphQL response
         
         Returns:
-            Dictionary with ecosystem, name, version_range
+            Dictionary with ecosystem, name, version_range, and actual_version
         """
         vuln = alert.get("securityVulnerability", {})
         package = vuln.get("package", {})
@@ -332,9 +455,13 @@ class GitHubClient:
         name = package.get("name", "")
         version_range = vuln.get("vulnerableVersionRange", "")
         
+        # Extract the actual version used in the repository from vulnerableRequirements
+        # This contains the version constraint from the manifest (pom.xml, requirements.txt, etc.)
+        actual_version = alert.get("vulnerableRequirements", "")
+        
         return {
             "ecosystem": ecosystem,
             "name": name,
-            "version_range": version_range
+            "version_range": version_range,
+            "actual_version": actual_version
         }
-

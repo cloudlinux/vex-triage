@@ -4,7 +4,7 @@ import sys
 import json
 import time
 import traceback
-from typing import Dict, Any
+from typing import Any
 
 from src.config import Config
 from src.utils import setup_logging, github_error, format_duration, ConfigurationError
@@ -13,7 +13,7 @@ from src.vex_client import VexClient
 from src.triage import TriageEngine
 
 
-def create_github_step_summary(summary: Dict[str, Any]) -> None:
+def create_github_step_summary(summary: dict[str, Any]) -> None:
     """
     Create GitHub Actions step summary with results.
     
@@ -89,11 +89,21 @@ def main() -> int:
         logger = setup_logging(config.verbosity)
         logger.info("TuxCare VEX Auto-Triage starting...")
         
+        # Log token info for debugging (without revealing actual token)
+        if config.verbosity == "DEBUG":
+            token = config.github_token
+            if token:
+                token_len = len(token)
+                token_prefix = token[:4] if len(token) >= 4 else "???"
+                logger.debug(f"Token loaded: length={token_len}, prefix={token_prefix}...")
+            else:
+                logger.error("Token is empty!")
+        
         # Initialize GitHub client
         github_client = GitHubClient(config.github_token, config.github_repository)
         
         # Initialize VEX clients for each ecosystem
-        vex_clients: Dict[str, VexClient] = {}
+        vex_clients: dict[str, VexClient] = {}
         for ecosystem in config.ecosystems:
             vex_url = config.get_vex_url(ecosystem)
             vex_clients[ecosystem] = VexClient(ecosystem, vex_url)
@@ -140,4 +150,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

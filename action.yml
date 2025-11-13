@@ -10,7 +10,7 @@ inputs:
   ecosystems:
     description: 'Comma-separated list of ecosystems to process (java, python, javascript, php)'
     required: true
-  github-token:
+  token:
     description: 'GitHub token with security_events write permission'
     required: true
   dry-run:

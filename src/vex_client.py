@@ -2,10 +2,16 @@
 
 import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Any
 import requests
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
 
-from src.utils import VexFetchError, retry_with_backoff
+from src.utils import VexFetchError
 
 
 logger = logging.getLogger("tuxcare-vex")
@@ -24,14 +30,15 @@ class VexClient:
         """
         self.ecosystem = ecosystem
         self.vex_url = vex_url
-        self._parsed_data: Optional[Dict[str, Any]] = None
+        self._parsed_data: dict[str, Any] | None = None
     
-    @retry_with_backoff(
-        max_retries=3,
-        initial_delay=1.0,
-        exceptions=(requests.RequestException,)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type(requests.RequestException),
+        reraise=True
     )
-    def fetch_vex(self) -> Dict[str, Any]:
+    def fetch_vex(self) -> dict[str, Any]:
         """
         Fetch VEX data from URL with retry logic.
         
@@ -68,7 +75,7 @@ class VexClient:
         except json.JSONDecodeError as e:
             raise VexFetchError(f"Invalid JSON in VEX data: {e}")
     
-    def parse_vex(self, vex_data: Dict[str, Any]) -> Dict[str, Any]:
+    def parse_vex(self, vex_data: dict[str, Any]) -> dict[str, Any]:
         """
         Parse VEX data into efficient lookup structures.
         
@@ -98,7 +105,7 @@ class VexClient:
             "cve_index": cve_index,
         }
     
-    def build_cve_index(self, vex_data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    def build_cve_index(self, vex_data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         """
         Build index mapping CVE IDs to affected packages.
         
@@ -108,7 +115,7 @@ class VexClient:
         Returns:
             Dictionary mapping CVE ID -> list of package info dicts
         """
-        cve_index: Dict[str, List[Dict[str, Any]]] = {}
+        cve_index: dict[str, list[dict[str, Any]]] = {}
         
         vulnerabilities = vex_data.get("vulnerabilities", [])
         
@@ -147,7 +154,7 @@ class VexClient:
         
         return cve_index
     
-    def extract_package_info(self, purl: str) -> Optional[Dict[str, str]]:
+    def extract_package_info(self, purl: str) -> dict[str, str] | None:
         """
         Extract package information from Package URL (purl).
         
@@ -187,25 +194,26 @@ class VexClient:
             
             # Handle namespace and name
             parts = rest.split("/")
-            if len(parts) == 1:
-                # No namespace
-                namespace = ""
-                name = parts[0]
-                full_name = name
-            elif len(parts) == 2:
-                # Has namespace
-                namespace = parts[0]
-                name = parts[1]
-                full_name = f"{namespace}:{name}"
-            else:
-                # Multiple parts, join namespace
-                namespace = "/".join(parts[:-1])
-                name = parts[-1]
-                # For Maven-style, use colon separator
-                if ecosystem == "maven":
-                    full_name = f"{namespace.replace('/', '.')}:{name}"
-                else:
-                    full_name = f"{namespace}/{name}"
+            match len(parts):
+                case 1:
+                    # No namespace
+                    namespace = ""
+                    name = parts[0]
+                    full_name = name
+                case 2:
+                    # Has namespace
+                    namespace = parts[0]
+                    name = parts[1]
+                    full_name = f"{namespace}:{name}"
+                case _:
+                    # Multiple parts, join namespace
+                    namespace = "/".join(parts[:-1])
+                    name = parts[-1]
+                    # For Maven-style, use colon separator
+                    if ecosystem == "maven":
+                        full_name = f"{namespace.replace('/', '.')}:{name}"
+                    else:
+                        full_name = f"{namespace}/{name}"
             
             return {
                 "ecosystem": ecosystem,
@@ -219,7 +227,7 @@ class VexClient:
             logger.warning(f"Failed to parse purl '{purl}': {e}")
             return None
     
-    def fetch_and_parse(self) -> Dict[str, Any]:
+    def fetch_and_parse(self) -> dict[str, Any]:
         """
         Fetch and parse VEX data (convenience method).
         
@@ -240,7 +248,7 @@ class VexClient:
         
         return parsed_data
     
-    def find_cve_packages(self, cve_id: str) -> List[Dict[str, Any]]:
+    def find_cve_packages(self, cve_id: str) -> list[dict[str, Any]]:
         """
         Find all packages affected by a CVE.
         
@@ -274,4 +282,3 @@ class VexClient:
                 return True
         
         return False
-

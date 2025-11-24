@@ -97,7 +97,7 @@ jobs:
     
     steps:
       - name: Run TuxCare VEX Auto-Triage
-        uses: anayden/tuxcare-workflow@main
+        uses: cloudlinux/vex-triage@v1
         with:
           ecosystems: 'java,python'
           token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -126,7 +126,7 @@ See [Prerequisites](#3-create-a-personal-access-token-pat) for detailed instruct
 ### Basic Usage - Single Ecosystem
 
 ```yaml
-- uses: anayden/tuxcare-workflow@main
+- uses: cloudlinux/vex-triage@v1
   with:
     ecosystems: 'java'
     token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -135,7 +135,7 @@ See [Prerequisites](#3-create-a-personal-access-token-pat) for detailed instruct
 ### Multiple Ecosystems
 
 ```yaml
-- uses: anayden/tuxcare-workflow@main
+- uses: cloudlinux/vex-triage@v1
   with:
     ecosystems: 'java,python,javascript,php'
     token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -146,7 +146,7 @@ See [Prerequisites](#3-create-a-personal-access-token-pat) for detailed instruct
 Test the action without dismissing alerts:
 
 ```yaml
-- uses: anayden/tuxcare-workflow@main
+- uses: cloudlinux/vex-triage@v1
   with:
     ecosystems: 'java'
     token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -159,7 +159,7 @@ Test the action without dismissing alerts:
 Process only the first 10 alerts:
 
 ```yaml
-- uses: anayden/tuxcare-workflow@main
+- uses: cloudlinux/vex-triage@v1
   with:
     ecosystems: 'java'
     token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -188,7 +188,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: anayden/tuxcare-workflow@main
+      - uses: cloudlinux/vex-triage@v1
         with:
           ecosystems: 'java,python'
           token: ${{ secrets.VEX_TRIAGE_TOKEN }}
@@ -408,7 +408,7 @@ Alerts are dismissed with reason "INACCURATE" (GitHub doesn't have a "PATCHED" r
 ### Action Issues
 
 For issues with this action:
-- GitHub Issues: https://github.com/anayden/tuxcare-workflow/issues
+- GitHub Issues: https://github.com/cloudlinux/vex-triage/issues
 - Check logs with `verbosity: DEBUG`
 - Test with `dry-run: true` first
 

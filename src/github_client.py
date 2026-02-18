@@ -8,7 +8,8 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type
+    retry_if_exception_type,
+    before_sleep_log
 )
 
 from src.utils import GitHubAPIError
@@ -187,56 +188,67 @@ class GitHubClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(requests.RequestException),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True
     )
-    def gql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _gql_with_retry(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """
-        Execute a GraphQL query.
-        
-        Args:
-            query: GraphQL query string
-            variables: Optional query variables
-        
-        Returns:
-            Response data
-        
-        Raises:
-            GitHubAPIError: If the request fails
+        Internal method: execute GraphQL query, letting transient errors propagate to tenacity.
+
+        Non-retryable errors (4xx, GraphQL errors) are raised as GitHubAPIError to halt retries.
+        Transient errors (Timeout, ConnectionError, 5xx) bubble up as RequestException for retry.
         """
         payload = {
             "query": query,
             "variables": variables or {}
         }
-        
-        try:
-            response = self.session.post(
-                self.GRAPHQL_URL,
-                json=payload,
-                timeout=60
+
+        response = self.session.post(
+            self.GRAPHQL_URL,
+            json=payload,
+            timeout=60
+        )
+
+        # Update rate limit info from headers
+        self._update_rate_limit(response)
+
+        if response.status_code != 200:
+            if response.status_code >= 500:
+                # Server errors are transient — raise as HTTPError (a RequestException subclass)
+                response.raise_for_status()
+            # Client errors (4xx) are not retryable
+            raise GitHubAPIError(
+                f"GraphQL request failed with status {response.status_code}: "
+                f"{response.text}"
             )
-            
-            # Update rate limit info from headers
-            self._update_rate_limit(response)
-            
-            if response.status_code != 200:
-                raise GitHubAPIError(
-                    f"GraphQL request failed with status {response.status_code}: "
-                    f"{response.text}"
-                )
-            
-            data = response.json()
-            
-            # Check for GraphQL errors
-            if "errors" in data:
-                error_messages = [e.get("message", str(e)) for e in data["errors"]]
-                raise GitHubAPIError(f"GraphQL errors: {', '.join(error_messages)}")
-            
-            return data.get("data", {})
-            
-        except requests.Timeout as e:
-            raise GitHubAPIError(f"Request timeout: {e}")
+
+        data = response.json()
+
+        # Check for GraphQL errors (not retryable)
+        if "errors" in data:
+            error_messages = [e.get("message", str(e)) for e in data["errors"]]
+            raise GitHubAPIError(f"GraphQL errors: {', '.join(error_messages)}")
+
+        return data.get("data", {})
+
+    def gql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+        """
+        Execute a GraphQL query with retry logic.
+
+        Args:
+            query: GraphQL query string
+            variables: Optional query variables
+
+        Returns:
+            Response data
+
+        Raises:
+            GitHubAPIError: If the request fails after all retries
+        """
+        try:
+            return self._gql_with_retry(query, variables)
         except requests.RequestException as e:
-            raise GitHubAPIError(f"Request failed: {e}")
+            raise GitHubAPIError(f"Request failed after retries: {e}") from e
     
     def _update_rate_limit(self, response: requests.Response) -> None:
         """Update rate limit info from response headers."""

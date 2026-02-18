@@ -1,6 +1,6 @@
 [project]
 name = "tuxcare-vex-autotriage"
-version = "1.0.0"
+version = "1.1.0"
 description = "Automatically dismiss Dependabot security alerts based on TuxCare VEX data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tuxcare/tuxcare-vex"
-Documentation = "https://github.com/tuxcare/tuxcare-vex#readme"
-Repository = "https://github.com/tuxcare/tuxcare-vex"
-Issues = "https://github.com/tuxcare/tuxcare-vex/issues"
+Homepage = "https://github.com/cloudlinux/vex-triage"
+Documentation = "https://github.com/cloudlinux/vex-triage#readme"
+Repository = "https://github.com/cloudlinux/vex-triage"
+Issues = "https://github.com/cloudlinux/vex-triage/issues"
 
 [build-system]
 requires = ["hatchling"]

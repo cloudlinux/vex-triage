@@ -8,7 +8,8 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type
+    retry_if_exception_type,
+    before_sleep_log
 )
 
 from src.utils import VexFetchError
@@ -36,44 +37,56 @@ class VexClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         retry=retry_if_exception_type(requests.RequestException),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True
     )
+    def _fetch_vex_with_retry(self) -> dict[str, Any]:
+        """
+        Internal method: fetch VEX data, letting transient errors propagate to tenacity.
+
+        Non-retryable errors (404, bad JSON) are raised as VexFetchError to halt retries.
+        Transient errors (ConnectionError, Timeout) bubble up as RequestException for retry.
+        """
+        logger.info(f"Fetching VEX data for {self.ecosystem} from {self.vex_url}")
+
+        response = requests.get(self.vex_url, timeout=120)
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                raise VexFetchError(f"VEX file not found: {self.vex_url}") from e
+            # Other HTTP errors (5xx, etc.) are retryable — re-raise as RequestException
+            raise
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise VexFetchError(f"Invalid JSON in VEX data: {e}") from e
+
+        logger.info(f"Successfully fetched VEX data for {self.ecosystem}")
+
+        # Log VEX metadata for freshness tracking
+        if "metadata" in data and "timestamp" in data["metadata"]:
+            timestamp = data["metadata"]["timestamp"]
+            logger.info(f"VEX data timestamp: {timestamp}")
+
+        return data
+
     def fetch_vex(self) -> dict[str, Any]:
         """
         Fetch VEX data from URL with retry logic.
-        
+
         Returns:
             Raw VEX data as dictionary
-        
+
         Raises:
             VexFetchError: If fetch fails after all retries
         """
-        logger.info(f"Fetching VEX data for {self.ecosystem} from {self.vex_url}")
-        
         try:
-            response = requests.get(self.vex_url, timeout=120)
-            response.raise_for_status()
-            
-            data = response.json()
-            logger.info(f"Successfully fetched VEX data for {self.ecosystem}")
-            
-            # Log VEX metadata for freshness tracking
-            if "metadata" in data and "timestamp" in data["metadata"]:
-                timestamp = data["metadata"]["timestamp"]
-                logger.info(f"VEX data timestamp: {timestamp}")
-            
-            return data
-            
-        except requests.Timeout as e:
-            raise VexFetchError(f"Timeout fetching VEX data: {e}")
-        except requests.HTTPError as e:
-            if e.response.status_code == 404:
-                raise VexFetchError(f"VEX file not found: {self.vex_url}")
-            raise VexFetchError(f"HTTP error fetching VEX data: {e}")
+            return self._fetch_vex_with_retry()
         except requests.RequestException as e:
-            raise VexFetchError(f"Failed to fetch VEX data: {e}")
-        except json.JSONDecodeError as e:
-            raise VexFetchError(f"Invalid JSON in VEX data: {e}")
+            raise VexFetchError(f"Failed to fetch VEX data after retries: {e}") from e
     
     def parse_vex(self, vex_data: dict[str, Any]) -> dict[str, Any]:
         """

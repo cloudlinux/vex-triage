@@ -4,10 +4,7 @@ from typing import Literal
 from pydantic import Field, field_validator, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-class ConfigurationError(Exception):
-    """Raised when configuration is invalid or missing."""
-    pass
+from src.utils import ConfigurationError
 
 
 class Config(BaseSettings):

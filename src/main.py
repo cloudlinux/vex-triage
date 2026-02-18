@@ -1,5 +1,6 @@
 """Main entry point for TuxCare VEX Auto-Triage GitHub Action."""
 
+import os
 import sys
 import json
 import time
@@ -22,7 +23,6 @@ def create_github_step_summary(summary: dict[str, Any]) -> None:
     """
     try:
         # Check if GITHUB_STEP_SUMMARY is set
-        import os
         summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
         if not summary_file:
             return

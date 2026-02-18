@@ -27,13 +27,15 @@ class VersionMatcher:
         Example:
             "30.1-jre.tuxcare" -> "30.1-jre"
             "2.7.18.tuxcare.3" -> "2.7.18"
+            "4.3.30.RELEASE-tuxcare.1" -> "4.3.30.RELEASE"
+            "5.3.39.tuxcare1" -> "5.3.39"
         """
         if not version_str:
             return ""
 
-        # Strip .tuxcare suffix and any following version counter
-        # Pattern: .tuxcare or .tuxcare.N
-        normalized = re.sub(r'\.tuxcare(\.\d+)?$', '', version_str)
+        # Strip tuxcare suffix and any following version counter
+        # Supports: .tuxcare.N, .tuxcare, -tuxcare.N, -tuxcare, .tuxcareN, -tuxcareN
+        normalized = re.sub(r'[.-]tuxcare(\.?\d+)?$', '', version_str)
 
         return normalized
 
